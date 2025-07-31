@@ -1,6 +1,5 @@
-Flask==2.3.2
-pymysql==1.1.0
-cryptography==42.0.5
-sqlalchemy==2.0.30
-psycopg2
-dotenv
+Flask==2.3.3
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+requests==2.32.3
+colorama==0.4.6
