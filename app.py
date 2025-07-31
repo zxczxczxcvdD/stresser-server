@@ -1,185 +1,129 @@
 from flask import Flask, request, jsonify
-import hashlib
 import uuid
-import os
+import time
 
 app = Flask(__name__)
 
-# Хранилище пользователей и ключей в памяти
 users = {
-    # Дефолтный админ: login -> {password, token, is_admin, subscription_days}
-    "kot": {
-        "password": hashlib.sha256("404sky".encode()).hexdigest(),
-        "token": str(uuid.uuid4()),
-        "is_admin": True,
-        "subscription_days": 9999
-    }
+    "kot": {"password": "404sky", "token": str(uuid.uuid4()), "is_admin": True, "subscription_days": 9999, "balance": 0.0, "referral_code": "admin_kot"},
+    "404sky": {"password": "404sky", "token": str(uuid.uuid4()), "is_admin": True, "subscription_days": 9999, "balance": 0.0, "referral_code": "admin_404sky"}
 }
-keys = {}  # key -> {days, used}
+keys = {}
 
-# Регистрация
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    login = data.get('login')
-    password = data.get('password')
-    if not login or not password:
-        return jsonify({"error": "Login and password required"}), 400
-    if login in users:
-        return jsonify({"error": "Login already exists"}), 400
-
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    token = str(uuid.uuid4())
-    users[login] = {
-        "password": hashed_password,
-        "token": token,
-        "is_admin": False,
-        "subscription_days": 0
-    }
-    return jsonify({"message": "User registered", "token": token, "subscription_days": 0}), 201
-
-# Аутентификация
-@app.route('/login', methods=['POST'])
+@app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
-    login = data.get('login')
-    password = data.get('password')
-    if not login or not password:
-        return jsonify({"error": "Login and password required"}), 400
+    login, password = data.get("login"), data.get("password")
+    if login in users and users[login]["password"] == password:
+        return jsonify({"token": users[login]["token"], "is_admin": users[login]["is_admin"], "subscription_days": users[login]["subscription_days"], "balance": users[login]["balance"]})
+    return jsonify({"error": "Invalid login or password"}), 401
 
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    user = users.get(login)
-    if user and user["password"] == hashed_password:
-        return jsonify({
-            "message": "Login successful",
-            "token": user["token"],
-            "is_admin": user["is_admin"],
-            "subscription_days": user["subscription_days"]
-        }), 200
-    return jsonify({"error": "Invalid credentials"}), 401
-
-# Валидация токена
-@app.route('/validate', methods=['POST'])
-def validate():
+@app.route("/register", methods=["POST"])
+def register():
     data = request.get_json()
-    token = data.get('token')
-    if not token:
-        return jsonify({"error": "Token required"}), 400
+    login, password = data.get("login"), data.get("password")
+    if login in users:
+        return jsonify({"error": "Login already exists"}), 400
+    token = str(uuid.uuid4())
+    referral_code = str(uuid.uuid4())[:8]
+    users[login] = {"password": password, "token": token, "is_admin": False, "subscription_days": 0, "balance": 0.0, "referral_code": referral_code}
+    return jsonify({"token": token, "subscription_days": 0, "balance": 0.0})
 
-    for login, user in users.items():
-        if user["token"] == token:
-            return jsonify({
-                "message": "Token valid",
-                "login": login,
-                "is_admin": user["is_admin"],
-                "subscription_days": user["subscription_days"]
-            }), 200
-    return jsonify({"error": "Invalid token"}), 401
-
-# Активация ключа
-@app.route('/activate_key', methods=['POST'])
+@app.route("/activate_key", methods=["POST"])
 def activate_key():
     data = request.get_json()
-    token = data.get('token')
-    key = data.get('key')
-    if not token or not key:
-        return jsonify({"error": "Token and key required"}), 400
-
-    # Проверка токена
-    user_login = None
+    token, key = data.get("token"), data.get("key")
     for login, user in users.items():
         if user["token"] == token:
-            user_login = login
-            break
-    if not user_login:
-        return jsonify({"error": "Invalid token"}), 401
+            if key in keys and not keys[key]["used"]:
+                keys[key]["used"] = True
+                users[login]["subscription_days"] += keys[key]["days"]
+                if keys[key].get("used_in_bot") and keys[key].get("used_in_loader"):
+                    return jsonify({"error": "Key already used in both bot and loader"}), 400
+                keys[key]["used_in_loader"] = True
+                if keys[key].get("referrer"):
+                    users[keys[key]["referrer"]]["balance"] += keys[key]["days"] * 0.1  # 10% бонус за реферала
+                return jsonify({"subscription_days": users[login]["subscription_days"]})
+            return jsonify({"error": "Invalid or used key"}), 400
+    return jsonify({"error": "Invalid token"}), 401
 
-    # Проверка ключа
-    if key not in keys:
-        return jsonify({"error": "Invalid key"}), 400
-    if keys[key]["used"]:
-        return jsonify({"error": "Key already used"}), 400
-
-    # Активация ключа
-    users[user_login]["subscription_days"] += keys[key]["days"]
-    keys[key]["used"] = True
-    return jsonify({
-        "message": "Key activated",
-        "subscription_days": users[user_login]["subscription_days"]
-    }), 200
-
-# Админ-панель
-@app.route('/admin', methods=['POST'])
-def admin_panel():
+@app.route("/activate_key_bot", methods=["POST"])
+def activate_key_bot():
     data = request.get_json()
-    token = data.get('token')
-    if not token:
-        return jsonify({"error": "Token required"}), 400
+    token, key = data.get("token"), data.get("key")
+    for login, user in users.items():
+        if user["token"] == token:
+            if key in keys and not keys[key]["used"]:
+                keys[key]["used"] = True
+                users[login]["subscription_days"] += keys[key]["days"]
+                if keys[key].get("used_in_bot") and keys[key].get("used_in_loader"):
+                    return jsonify({"error": "Key already used in both bot and loader"}), 400
+                keys[key]["used_in_bot"] = True
+                if keys[key].get("referrer"):
+                    users[keys[key]["referrer"]]["balance"] += keys[key]["days"] * 0.1
+                return jsonify({"subscription_days": users[login]["subscription_days"]})
+            return jsonify({"error": "Invalid or used key"}), 400
+    return jsonify({"error": "Invalid token"}), 401
 
-    # Проверка админ-прав
-    user_login = None
+@app.route("/add_balance", methods=["POST"])
+def add_balance():
+    data = request.get_json()
+    token, amount = data.get("token"), data.get("amount")
     for login, user in users.items():
         if user["token"] == token and user["is_admin"]:
-            user_login = login
-            break
-    if not user_login:
-        return jsonify({"error": "Admin access required"}), 403
-
-    action = data.get('action')
-    if action == "register":
-        login = data.get('login')
-        password = data.get('password')
-        if not login or not password:
-            return jsonify({"error": "Login and password required"}), 400
-        if login in users:
-            return jsonify({"error": "Login already exists"}), 400
-        hashed_password = hashlib.sha256(password.encode()).hexdigest()
-        token_new = str(uuid.uuid4())
-        users[login] = {
-            "password": hashed_password,
-            "token": token_new,
-            "is_admin": False,
-            "subscription_days": 0
-        }
-        return jsonify({"message": f"User {login} registered by admin", "token": token_new}), 201
-
-    elif action == "sub":
-        login = data.get('login')
-        days = data.get('days')
-        if not login or not days:
-            return jsonify({"error": "Login and days required"}), 400
-        if login not in users:
+            target_login = data.get("login")
+            if target_login in users:
+                users[target_login]["balance"] += amount
+                return jsonify({"message": f"Added {amount} to {target_login}'s balance", "new_balance": users[target_login]["balance"]})
             return jsonify({"error": "User not found"}), 404
-        users[login]["subscription_days"] = days
-        return jsonify({"message": f"User {login} subscribed for {days} days"}), 200
+    return jsonify({"error": "Admin access required"}), 401
 
-    elif action == "unsub":
-        login = data.get('login')
-        if not login:
-            return jsonify({"error": "Login required"}), 400
-        if login not in users:
-            return jsonify({"error": "User not found"}), 404
-        users[login]["subscription_days"] = 0
-        return jsonify({"message": f"User {login} unsubscribed"}), 200
+@app.route("/withdraw_balance", methods=["POST"])
+def withdraw_balance():
+    data = request.get_json()
+    token, amount = data.get("token"), data.get("amount")
+    for login, user in users.items():
+        if user["token"] == token:
+            if user["balance"] >= amount:
+                user["balance"] -= amount
+                return jsonify({"message": f"Withdrawn {amount} from {login}'s balance", "new_balance": user["balance"]})
+            return jsonify({"error": "Insufficient balance"}), 400
+    return jsonify({"error": "Invalid token"}), 401
 
-    elif action == "genkey":
-        days = data.get('days')
-        key = data.get('key')
-        if not days or not key:
-            return jsonify({"error": "Key and days required"}), 400
-        if key in keys:
-            return jsonify({"error": "Key already exists"}), 400
-        keys[key] = {"days": days, "used": False}
-        return jsonify({"message": "Key generated", "key": key, "days": days}), 200
-
-    elif action == "list":
-        user_list = [
-            {"login": login, "subscription_days": user["subscription_days"], "is_admin": user["is_admin"]}
-            for login, user in users.items()
-        ]
-        return jsonify({"message": "User list", "users": user_list}), 200
-
-    return jsonify({"error": "Invalid action"}), 400
+@app.route("/admin", methods=["POST"])
+def admin():
+    data = request.get_json()
+    token, action = data.get("token"), data.get("action")
+    for login, user in users.items():
+        if user["token"] == token and user["is_admin"]:
+            if action == "reg":
+                new_login, new_password = data.get("login"), data.get("password")
+                if new_login in users:
+                    return jsonify({"error": "Login already exists"}), 400
+                new_token = str(uuid.uuid4())
+                new_referral_code = str(uuid.uuid4())[:8]
+                users[new_login] = {"password": new_password, "token": new_token, "is_admin": False, "subscription_days": 0, "balance": 0.0, "referral_code": new_referral_code}
+                return jsonify({"message": f"Registered {new_login}"})
+            elif action == "sub":
+                target_login, days = data.get("login"), data.get("days")
+                if target_login in users:
+                    users[target_login]["subscription_days"] += days
+                    return jsonify({"message": f"Subscribed {target_login} for {days} days"})
+                return jsonify({"error": "User not found"}), 404
+            elif action == "unsub":
+                target_login = data.get("login")
+                if target_login in users:
+                    users[target_login]["subscription_days"] = 0
+                    return jsonify({"message": f"Unsubscribed {target_login}"})
+                return jsonify({"error": "User not found"}), 404
+            elif action == "genkey":
+                days = data.get("days")
+                key = str(uuid.uuid4())
+                keys[key] = {"days": days, "used": False, "used_in_bot": False, "used_in_loader": False, "referrer": login}
+                return jsonify({"key": key, "days": days})
+            elif action == "list":
+                return jsonify({"users": [{"login": k, "subscription_days": v["subscription_days"], "balance": v["balance"]} for k, v in users.items()]})
+    return jsonify({"error": "Admin access required"}), 401
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=5000)
