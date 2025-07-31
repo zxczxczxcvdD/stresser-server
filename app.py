@@ -48,10 +48,10 @@ def register():
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
-        return jsonify({"error": "Login already exists"}), 400
+        return jsonify({"error": "Login exists"}), 400
     conn.close()
     
-    return jsonify({"message": "User registered", "token": token, "subscription_days": 0}), 201
+    return jsonify({"message": "Registered", "token": token, "subscription_days": 0}), 201
 
 # Аутентификация
 @app.route('/login', methods=['POST'])
@@ -72,8 +72,8 @@ def login():
     
     if result:
         if result[1]:  # is_banned
-            return jsonify({"error": "User is banned"}), 403
-        return jsonify({"message": "Login successful", "token": result[0], "is_admin": bool(result[2]), "subscription_days": result[3]}), 200
+            return jsonify({"error": "Banned"}), 403
+        return jsonify({"message": "Logged in", "token": result[0], "is_admin": bool(result[2]), "subscription_days": result[3]}), 200
     return jsonify({"error": "Invalid credentials"}), 401
 
 # Активация ключа
@@ -106,7 +106,7 @@ def activate_key():
     conn.commit()
     conn.close()
     
-    return jsonify({"message": "Key activated", "subscription_days": days}), 200
+    return jsonify({"message": "Activated", "subscription_days": days}), 200
 
 # Админ-панель
 @app.route('/admin', methods=['POST'])
@@ -126,7 +126,7 @@ def admin_panel():
         return jsonify({"error": "Admin access required"}), 403
     
     action = data.get('action')
-    if action == "register":
+    if action == "reg":
         login = data.get('login')
         password = data.get('password')
         if not login or not password:
@@ -141,9 +141,9 @@ def admin_panel():
             conn.commit()
         except sqlite3.IntegrityError:
             conn.close()
-            return jsonify({"error": "Login already exists"}), 400
+            return jsonify({"error": "Login exists"}), 400
         conn.close()
-        return jsonify({"message": "User registered by admin", "token": token_new, "subscription_days": 0}), 201
+        return jsonify({"message": "Registered", "token": token_new, "subscription_days": 0}), 201
     
     elif action == "ban":
         login = data.get('login')
@@ -154,7 +154,7 @@ def admin_panel():
         c.execute("UPDATE users SET is_banned = 1 WHERE login = ?", (login,))
         conn.commit()
         conn.close()
-        return jsonify({"message": f"User {login} banned"}), 200
+        return jsonify({"message": "Banned", "login": login}), 200
     
     elif action == "unban":
         login = data.get('login')
@@ -165,21 +165,21 @@ def admin_panel():
         c.execute("UPDATE users SET is_banned = 0 WHERE login = ?", (login,))
         conn.commit()
         conn.close()
-        return jsonify({"message": f"User {login} unbanned"}), 200
+        return jsonify({"message": "Unbanned", "login": login}), 200
     
-    elif action == "subscribe":
+    elif action == "sub":
         login = data.get('login')
         days = data.get('days')
         if not login or not days or not isinstance(days, int):
-            return jsonify({"error": "Login and valid days required"}), 400
+            return jsonify({"error": "Login and days required"}), 400
         conn = sqlite3.connect("instance/users.db")
         c = conn.cursor()
         c.execute("UPDATE users SET subscription_days = subscription_days + ? WHERE login = ?", (days, login))
         conn.commit()
         conn.close()
-        return jsonify({"message": f"Added {days} days to {login}'s subscription"}), 200
+        return jsonify({"message": "Subscribed", "login": login, "days": days}), 200
     
-    elif action == "unsubscribe":
+    elif action == "unsub":
         login = data.get('login')
         if not login:
             return jsonify({"error": "Login required"}), 400
@@ -188,7 +188,7 @@ def admin_panel():
         c.execute("UPDATE users SET subscription_days = 0 WHERE login = ?", (login,))
         conn.commit()
         conn.close()
-        return jsonify({"message": f"Removed subscription from {login}"}), 200
+        return jsonify({"message": "Unsubscribed", "login": login}), 200
     
     elif action == "list":
         conn = sqlite3.connect("instance/users.db")
@@ -196,19 +196,19 @@ def admin_panel():
         c.execute("SELECT login, is_banned, is_admin, subscription_days FROM users")
         users = [{"login": row[0], "is_banned": bool(row[1]), "is_admin": bool(row[2]), "subscription_days": row[3]} for row in c.fetchall()]
         conn.close()
-        return jsonify({"message": "User list", "users": users}), 200
+        return jsonify({"message": "Users", "users": users}), 200
     
-    elif action == "generate_key":
+    elif action == "genkey":
         days = data.get('days')
         if not days or not isinstance(days, int):
-            return jsonify({"error": "Valid days required"}), 400
+            return jsonify({"error": "Days required"}), 400
         key = str(uuid.uuid4())
         conn = sqlite3.connect("instance/users.db")
         c = conn.cursor()
         c.execute("INSERT INTO keys (id, key, days) VALUES (?, ?, ?)", (str(uuid.uuid4()), key, days))
         conn.commit()
         conn.close()
-        return jsonify({"message": "Key generated", "key": key, "days": days}), 200
+        return jsonify({"message": "Generated", "key": key, "days": days}), 200
     
     return jsonify({"error": "Invalid action"}), 400
 
