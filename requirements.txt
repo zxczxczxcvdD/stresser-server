@@ -3,3 +3,4 @@ pymysql==1.1.0
 cryptography==42.0.5
 sqlalchemy==2.0.30
 psycopg2
+dotenv
