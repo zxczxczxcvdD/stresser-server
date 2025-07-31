@@ -15,7 +15,8 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id TEXT PRIMARY KEY, login TEXT UNIQUE, password TEXT, token TEXT, is_banned INTEGER DEFAULT 0, is_admin INTEGER DEFAULT 0, subscription_days INTEGER DEFAULT 0)''')
-    
+    c.execute('''CREATE TABLE IF NOT EXISTS keys
+                 (id TEXT PRIMARY KEY, key TEXT UNIQUE, days INTEGER, used_by TEXT, used_at TIMESTAMP)''')
     c.execute("SELECT login FROM users WHERE login = 'kot'")
     if not c.fetchone():
         hashed_password = hashlib.sha256("404sky".encode()).hexdigest()
@@ -75,47 +76,37 @@ def login():
         return jsonify({"message": "Login successful", "token": result[0], "is_admin": bool(result[2]), "subscription_days": result[3]}), 200
     return jsonify({"error": "Invalid credentials"}), 401
 
-# Валидация токена
-@app.route('/validate', methods=['POST'])
-def validate():
+# Активация ключа
+@app.route('/activate_key', methods=['POST'])
+def activate_key():
     data = request.get_json()
     token = data.get('token')
-    if not token:
-        return jsonify({"error": "Token required"}), 400
-    
-    conn = sqlite3.connect("instance/users.db")
-    c = conn.cursor()
-    c.execute("SELECT login, is_banned, is_admin, subscription_days FROM users WHERE token = ?", (token,))
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        if result[1]:  # is_banned
-            return jsonify({"error": "User is banned"}), 403
-        return jsonify({"message": "Token valid", "login": result[0], "is_admin": bool(result[2]), "subscription_days": result[3]}), 200
-    return jsonify({"error": "Invalid token"}), 401
-
-# Чат
-@app.route('/chat', methods=['POST'])
-def chat():
-    data = request.get_json()
-    token = data.get('token')
-    message = data.get('message')
-    if not token or not message:
-        return jsonify({"error": "Token and message required"}), 400
+    key = data.get('key')
+    if not token or not key:
+        return jsonify({"error": "Token and key required"}), 400
     
     conn = sqlite3.connect("instance/users.db")
     c = conn.cursor()
     c.execute("SELECT login FROM users WHERE token = ?", (token,))
     user = c.fetchone()
+    if not user:
+        conn.close()
+        return jsonify({"error": "Invalid token"}), 401
+    login = user[0]
+    
+    c.execute("SELECT days, used_by FROM keys WHERE key = ? AND used_by IS NULL", (key,))
+    key_data = c.fetchone()
+    if not key_data:
+        conn.close()
+        return jsonify({"error": "Invalid or used key"}), 400
+    days = key_data[0]
+    
+    c.execute("UPDATE users SET subscription_days = subscription_days + ? WHERE token = ?", (days, token))
+    c.execute("UPDATE keys SET used_by = ?, used_at = ? WHERE key = ?", (login, time.time(), key))
+    conn.commit()
     conn.close()
     
-    if not user:
-        return jsonify({"error": "Invalid token"}), 401
-    
-    login = user[0]
-    # Здесь можно добавить сохранение сообщений в отдельную таблицу для истории
-    return jsonify({"message": f"{login}: {message}", "timestamp": time.time()}), 200
+    return jsonify({"message": "Key activated", "subscription_days": days}), 200
 
 # Админ-панель
 @app.route('/admin', methods=['POST'])
@@ -206,6 +197,18 @@ def admin_panel():
         users = [{"login": row[0], "is_banned": bool(row[1]), "is_admin": bool(row[2]), "subscription_days": row[3]} for row in c.fetchall()]
         conn.close()
         return jsonify({"message": "User list", "users": users}), 200
+    
+    elif action == "generate_key":
+        days = data.get('days')
+        if not days or not isinstance(days, int):
+            return jsonify({"error": "Valid days required"}), 400
+        key = str(uuid.uuid4())
+        conn = sqlite3.connect("instance/users.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO keys (id, key, days) VALUES (?, ?, ?)", (str(uuid.uuid4()), key, days))
+        conn.commit()
+        conn.close()
+        return jsonify({"message": "Key generated", "key": key, "days": days}), 200
     
     return jsonify({"error": "Invalid action"}), 400
 
